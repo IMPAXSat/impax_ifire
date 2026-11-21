@@ -6,6 +6,7 @@ CCSDS_APID,CCSDS_apid,5,11,big,0,0,-1,-1,-1,0,0,1280,1280,uint16,uint16,count,co
 CCSDS_SEQUENCE_FLAG,CCSDS_seq_flag,16,2,big,0,0,-1,-1,-1,0,0,3,3,uint8,uint8,1,1,,CCSDS sequence flags
 CCSDS_SEQUENCE_COUNT,CCSDS_seq_count,18,14,big,0,0,-1,-1,-1,0,0,0,16383,uint16,uint16,count,count,,CCSDS sequence counter
 CCSDS_PACKET_LENGTH,CCSDS_length,32,16,big,0,0,-1,-1,-1,0,0,1,65535,uint16,uint16,count,count,,CCSDS packet length
+PCOUNT,Packet_count,-1,-1,big,0,0,-1,-1,-1,0,0,0,4294967295,uint32,uint32,count,count,,Packet counter added during raw parsing for ordering
 PFLAGS,Packet_flags,48,8,little,0,0,-1,-1,-1,1,0,0,255,uint16,uint16,1,1,,Flags data for the packet
 ENACH1,CH1_en,48,1,little,0,0,-1,-1,-1,1,0,0,1,uint8,uint8,1,1,,Packet contains data from CH1
 ENACH2,CH2_en,49,1,little,0,0,-1,-1,-1,1,0,0,1,uint8,uint8,1,1,,Packet contains data from CH2
