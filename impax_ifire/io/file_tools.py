@@ -14,6 +14,7 @@ from astropy.time import Time
 from astropy.timeseries import TimeSeries
 from astropy.wcs import WCS
 from ndcube import NDCollection, NDCube
+from spacepy.pycdf import CDFError
 from swxsoc.swxdata import SWXData
 
 from impax_ifire.util.telemetry_config import telemetry_config
@@ -261,6 +262,7 @@ def parse_fire(file: str, start_offset: int = 0):
             ("CCSDS_SEQUENCE_FLAG", np.uint8),
             ("CCSDS_SEQUENCE_COUNT", np.uint16),
             ("CCSDS_PACKET_LENGTH", np.uint16),
+            ("PCOUNT", np.uint32),
             ("PFLAGS", np.uint8),
             ("ACCUM", np.uint8),
             ("NBIN", np.uint8),
@@ -278,6 +280,7 @@ def parse_fire(file: str, start_offset: int = 0):
     res = np.empty(0, dtype=ptype)
 
     k = start_offset
+    pk = 0
     last_nbin = 0
     while k < len(buff):
         version = ccsds_version_number(k, buff)
@@ -322,6 +325,7 @@ def parse_fire(file: str, start_offset: int = 0):
                 seq_flag,
                 seq_count,
                 longness,
+                pk,
                 this_pflags,
                 this_accum,
                 this_nbin,
@@ -340,6 +344,7 @@ def parse_fire(file: str, start_offset: int = 0):
         res = np.append(res, np.array(thisp, dtype=ptype))
 
         k += 6 + longness + 1
+        pk += 1
 
     # turn this into a dict, CCSDSPy wannabe
     d = {name: res[name] for name in ptype.names}
@@ -502,7 +507,27 @@ def demux_hk(p: dict):
     return p, fills
 
 
-def make_timeseries(p, fills):
+def make_timeseries(p):
+    """Construct an Astropy TimeSeries from the packet data in `p`.
+
+    Parameters
+    ----------
+    p: dict[str, np.ndarray]
+        The output of `demux_hk`, a dictionary labeling a bunch of numpy arrays, one for each field in the CCSDS packet.
+
+    Returns
+    -------
+    ts: astropy.TimeSeries
+        Each packet field spanning time. Time is GPS time and recorded as an astropy.Time object. Most packet fields have units of `counts`, they are uncalibrated at this stage.
+
+    ndc: ndcube.NDCollection
+        Spectra from each of the two detectors in FIRE.
+
+    support: dict[str, astropy.NDData]
+        Bin indices for the spectral data. These are record-varying because FIRE has configurable bin count.
+
+    """
+
     tlm_config = telemetry_config()
 
     # base_epoch = "2000-01-01T00:00:00"
@@ -529,6 +554,14 @@ def make_timeseries(p, fills):
     for k in range(len(p["NBIN"])):
         these_bins = np.arange(0, p["NBIN"][k] + 2, 1, dtype=p["NBIN"].dtype)
         ebins[k, 0 : len(these_bins)] = these_bins
+
+    # NOTE: as implemented, with the range stop at p["NBIN"][k] + 2,
+    # this is a bin index of some sort. IF instead we go up to p["NBIN"][k] + 3
+    # we get bin edges. Autoplot doesn't seem to mind how many elements (i.e. bin
+    # centers vs. bin edges) are in this ebins array for plotting spectra.
+    #
+    # But how we assign energies in the next level up does care what ebins means.
+    # I could include both bin edges and centers in the CDF here...
 
     # Format the bins into an NDData object as SWXData desires us to.
     ebins_support = NDData(
@@ -586,7 +619,11 @@ def make_timeseries(p, fills):
 
 
 def make_cdf(
-    ts: TimeSeries, ndc: NDCollection, support: dict, save_dir: str = l0_depot
+    ts: TimeSeries,
+    ndc: NDCollection,
+    support: dict,
+    source: str,
+    save_dir: str = l0_depot,
 ):
     """Save the packet data as a CDF file.
 
@@ -614,6 +651,7 @@ def make_cdf(
     meta = SWXData.global_attribute_template(
         instr_name="ifire", data_level="l0", version="1.0.0"
     )
+    meta["Source_file"] = source
 
     data = SWXData(timeseries=ts, meta=meta, support=support, spectra=ndc)
 
@@ -634,19 +672,46 @@ def make_cdf(
     return cdf
 
 
-def read_file(data_filename):
+def break_ttag_jumps(p: dict, stepmax: int = 30000):
+    """Split the dct `p` whenever the TTAG value jumps by more than `stepmax`.
+
+    The default value of `stepmax = 30000` measures 5 minutes of `ttag` time.
     """
-    Read a raw telemetry file and create a CDF L0 file from it.
+    if len(p) == 0:
+        return []
+
+    prev, nxt = p["TTAG"][:-1], p["TTAG"][1:]
+
+    # Ab E C# A C
+    giantsteps = (nxt <= prev) | ((nxt - prev) > stepmax)
+    breaks = np.flatnonzero(giantsteps) + 1
+
+    starts = np.concatenate(([0], breaks))
+    ends = np.concatenate((breaks, [len(p["TTAG"])]))
+
+    return [{k: v.copy()[s:e] for k, v in p.items()} for s, e in zip(starts, ends)]
+
+
+def read_file(data_filename, slice_ttag: bool = True):
+    """
+    Read a raw telemetry file and create CDF L0 file(s) from it.
+
+    An optional flag (`slice_ttag`) will create separate CDF files for each contiguous
+    range of time provided in the source data. This is to handle the case where time-set
+    commands are used frequently and there appear to be large time leaps in the data.
 
     Parameters
     ----------
     data_filename: str
         A file to read.
 
+    slice_ttag: bool
+        Create a separate CDF file for each contiguous range of TTAG detected.
+
     Returns
     -------
-    data: str
-        A path to the CDF file created from the telemetry data.
+    data: list[str]
+        A path to the CDF file(s) created from the telemetry data.
 
 
     Examples
@@ -656,12 +721,47 @@ def read_file(data_filename):
 
     """
 
-    p = parse_fire(data_filename)
-    p, fills = demux_hk(p)
-    ts, ndc, support = make_timeseries(p, fills)
+    pdata = parse_fire(data_filename)
 
-    cdf = make_cdf(ts, ndc, support)
-    return cdf
+    outfiles = []
+    if slice_ttag:
+        # produce a CDF file for each ~contiguous range of TTAG in the source data.
+        psplit = break_ttag_jumps(pdata)
+
+        for p in psplit:
+            if len(p["TTAG"]) < 100:
+                continue
+            p, fills = demux_hk(p)
+            ts, ndc, support = make_timeseries(p)
+            try:
+                cdf = make_cdf(
+                    ts,
+                    ndc,
+                    support,
+                    data_filename,
+                    save_dir="/Users/thanasi/Documents/IMPAX/Data/Ground/impax_ifire/impax_ifire/data/logsplit",
+                )
+            except CDFError:
+                print(f"duplicate CDF for time {np.min(ts['time']).gps}")
+                continue
+            outfiles.append(cdf)
+
+    else:
+        # produce a single CDF file with everything.
+        pdata, fills = demux_hk(pdata)
+        ts, ndc, support = make_timeseries(pdata)
+
+        cdf = make_cdf(
+            ts,
+            ndc,
+            support,
+            data_filename,
+            save_dir="/Users/thanasi/Documents/IMPAX/Data/Ground/impax_ifire/data/logsplit",
+        )
+
+        outfiles.append(cdf)
+
+    return outfiles
 
 
 if __name__ == "__main__":
