@@ -265,7 +265,8 @@ def do_L0L1(cdf_L0, save_dir=l1_depot):
     outdict["Accum_rate2"] = (
         outdict["Accum_rate2"].value * 10 / outdict["Accumulations"].value * u.Hz
     )
-    # ebins
+
+    # ebins: todo
 
     ts = TimeSeries(time=indata.timeseries["time"], data=outdict)
 
@@ -287,23 +288,12 @@ def do_L0L1(cdf_L0, save_dir=l1_depot):
         print(k)
         outdata.timeseries[k].meta["CATDESC"] = tlm_obj.description
 
-    # manually set CATDESC for the following:
-    # ts["time"].meta["CATDESC"] = "UTC time since some epoch"
-
     # convert all fillvals to their float equivalents.
     #   ACTUALLY, SWXData loads /everything/ into a float64, with NaNs where int FILLVALs were found. So just check for nan.
-
-    # or maybe do nothing?
-    # for k in changes_L1:
-    #     outdata.timeseries[k][np.isnan(indata.timeseries[k])] = (
-    #         fillval(np.float32) * outdata.timeseries[k].unit
-    #     )
 
     # todo: do something to this as well...
     #
     # a curiosity of SWXData: I put this (ebins) into the source object as a support var, not as spectra. But when I read the file indata it shows up as a spectra variable. Not sure where it moved (in readback vs. write).
-
-    # outdata.spectra["ebins"]
 
     cdf = outdata.save(save_dir)
     return cdf
