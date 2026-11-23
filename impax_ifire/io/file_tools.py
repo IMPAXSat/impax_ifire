@@ -739,7 +739,7 @@ def read_file(data_filename, slice_ttag: bool = True):
                     ndc,
                     support,
                     data_filename,
-                    save_dir="/Users/thanasi/Documents/IMPAX/Data/Ground/impax_ifire/impax_ifire/data/logsplit",
+                    save_dir=l0_depot,
                 )
             except CDFError:
                 print(f"duplicate CDF for time {np.min(ts['time']).gps}")
@@ -756,7 +756,7 @@ def read_file(data_filename, slice_ttag: bool = True):
             ndc,
             support,
             data_filename,
-            save_dir="/Users/thanasi/Documents/IMPAX/Data/Ground/impax_ifire/data/logsplit",
+            save_dir=l0_depot,
         )
 
         outfiles.append(cdf)
